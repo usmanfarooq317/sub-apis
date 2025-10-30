@@ -1,0 +1,11 @@
+version: "3.9"
+
+services:
+  subapis_service:
+    build: .
+    container_name: test_subapis_service
+    ports:
+      - "5040:5040"
+    volumes:
+      - .:/app
+    restart: always
