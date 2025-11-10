@@ -192,16 +192,32 @@ def api_encrypt():
                 }
             )
 
+            # Updated SubscriberUBPInquiry with editable MSISDN
+            additional_apis["SubscriberUBPInquiry"] = call_ibm_api(
+                "https://rgw.8798-f464fa20.eu-de.ri1.apiconnect.appdomain.cloud/tmfb/dev-catalog/SubscriberUtilityBill/Inquiry",
+                xhash,
+                {"ConsumerNumber": "112233", "MSISDN": number, "Company": "LESCO"}
+            )
+
+            # Updated SubscriberUBPTransfer with editable MSISDN
             additional_apis["SubscriberUBPTransfer"] = call_ibm_api(
                 "https://rgw.8798-f464fa20.eu-de.ri1.apiconnect.appdomain.cloud/tmfb/dev-catalog/SubscriberUtilityBill/Payment",
                 xhash,
                 {"Amount": "100.00", "ConsumerNumber": "01261110004080", "MSISDN": number, "Company": "PESCO"}
             )
 
-            additional_apis["SubscriberUBPInquiry"] = call_ibm_api(
+            # New Utility Bill Inquiry endpoint
+            additional_apis["UtilityBillInquiry"] = call_ibm_api(
                 "https://rgw.8798-f464fa20.eu-de.ri1.apiconnect.appdomain.cloud/tmfb/dev-catalog/SubscriberUtilityBill/Inquiry",
                 xhash,
-                {"ConsumerNumber": "01261110004080", "MSISDN": number, "Company": "PESCO"}
+                {"ConsumerNumber": "112233", "MSISDN": number, "Company": "LESCO"}
+            )
+
+            # New Utility Bill Payment endpoint
+            additional_apis["UtilityBillPayment"] = call_ibm_api(
+                "https://rgw.8798-f464fa20.eu-de.ri1.apiconnect.appdomain.cloud/tmfb/dev-catalog/SubscriberUtilityBill/Payment",
+                xhash,
+                {"Amount": "100.00", "ConsumerNumber": "01261110004080", "MSISDN": number, "Company": "PESCO"}
             )
 
             additional_apis["AccountLimitKYC"] = call_ibm_api(
@@ -232,7 +248,8 @@ def api_encrypt():
             "encryptedValue": encrypted_value,
             "ibmLoginResult": login_result,
             "xHash": global_xhash,
-            "additionalApis": additional_apis
+            "additionalApis": additional_apis,
+            "loginSuccess": isinstance(login_result, dict) and login_result.get("ResponseCode") == "0"
         })
 
     except Exception as e:
@@ -286,7 +303,7 @@ def serve_index():
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>IBM/RSA API Dashboard</title>
+<title>IBM/RSA SUB-API Dashboard</title>
 <style>
   /* ---------- Global Styles ---------- */
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -336,8 +353,37 @@ def serve_index():
     font-weight: 600;
     cursor: pointer;
     transition: 0.2s;
+    position: relative;
+    overflow: hidden;
   }
   button:hover { background-color: #357ABD; }
+  button:disabled {
+    background-color: #cccccc;
+    cursor: not-allowed;
+  }
+
+  /* ---------- Loading Bar ---------- */
+  .loading-bar {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    height: 3px;
+    background: linear-gradient(90deg, #4a90e2, #357ABD, #4a90e2);
+    background-size: 200% 100%;
+    animation: loadingAnimation 1.5s infinite linear;
+    width: 100%;
+    border-radius: 0 0 8px 8px;
+  }
+
+  @keyframes loadingAnimation {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+  }
+
+  .loading-text {
+    position: relative;
+    z-index: 1;
+  }
 
   /* ---------- Response Boxes ---------- */
   .response-box {
@@ -358,6 +404,28 @@ def serve_index():
     white-space: pre-wrap;
     word-break: break-word;
     color: #111;
+  }
+
+  /* ---------- Error Message ---------- */
+  .error-message {
+    background: #ffe6e6;
+    color: #d63031;
+    padding: 12px;
+    border-radius: 8px;
+    margin-top: 10px;
+    border: 1px solid #ff7675;
+    font-weight: 600;
+  }
+
+  /* ---------- Success Message ---------- */
+  .success-message {
+    background: #e6ffe6;
+    color: #00b894;
+    padding: 12px;
+    border-radius: 8px;
+    margin-top: 10px;
+    border: 1px solid #55efc4;
+    font-weight: 600;
   }
 
   /* ---------- Transactions Table ---------- */
@@ -385,21 +453,23 @@ def serve_index():
 </head>
 <body>
 <div class="container">
-  <h1>🔐 IBM/RSA API Dashboard</h1>
+  <h1>🔐 IBM/RSA SUB-API Dashboard</h1>
 
   <!-- ---------- Login Section ---------- -->
   <div class="card">
     <h3>1️⃣ Login & Generate X-Hash</h3>
     <label for="numberInput">Number</label>
-    <select id="numberInput">
-      <option value="923319154345">923319154345</option>
-      <option value="923481565391">923481565391</option>
-    </select>
+    <input type="text" id="numberInput" placeholder="Enter MSISDN (e.g., 923319154345)" value="923319154345">
 
     <label for="pinInput">PIN</label>
     <input type="password" id="pinInput" placeholder="Enter PIN">
 
-    <button id="loginBtn">Encrypt & Login</button>
+    <button id="loginBtn">
+      <span class="loading-text">Encrypt & Login</span>
+      <div class="loading-bar" style="display: none;"></div>
+    </button>
+
+    <div id="loginMessage" style="display:none;"></div>
 
     <div id="loginResults" class="response-box" style="display:none;">
       <h4>Encrypted Value</h4>
@@ -421,7 +491,10 @@ def serve_index():
     <h3>3️⃣ Transaction Status Inquiry</h3>
     <label for="transactionIdInput">Transaction ID</label>
     <input type="text" id="transactionIdInput" placeholder="Enter Transaction ID">
-    <button id="transactionBtn">Check Status</button>
+    <button id="transactionBtn">
+      <span class="loading-text">Check Status</span>
+      <div class="loading-bar" style="display: none;"></div>
+    </button>
 
     <div id="transactionResult" class="response-box" style="display:none;">
       <h4>Transaction Status Result</h4>
@@ -440,22 +513,42 @@ def serve_index():
   function setLoading(button, state) {
     if(state){
       button.disabled = true;
-      button.textContent = "Processing...";
+      const loadingText = button.querySelector('.loading-text');
+      const loadingBar = button.querySelector('.loading-bar');
+      loadingText.textContent = "Processing...";
+      loadingBar.style.display = 'block';
     } else {
       button.disabled = false;
-      button.textContent = button.getAttribute("data-original") || "Submit";
+      const loadingText = button.querySelector('.loading-text');
+      const loadingBar = button.querySelector('.loading-bar');
+      loadingText.textContent = button.getAttribute("data-original") || "Submit";
+      loadingBar.style.display = 'none';
     }
+  }
+
+  function showMessage(message, type) {
+    const messageDiv = document.getElementById("loginMessage");
+    messageDiv.innerHTML = `<div class="${type === 'error' ? 'error-message' : 'success-message'}">${message}</div>`;
+    messageDiv.style.display = "block";
+  }
+
+  function hideMessage() {
+    document.getElementById("loginMessage").style.display = "none";
   }
 
   // Login & API calls
   const loginBtn = document.getElementById("loginBtn");
-  loginBtn.setAttribute("data-original", loginBtn.textContent);
+  loginBtn.setAttribute("data-original", "Encrypt & Login");
   loginBtn.addEventListener("click", async () => {
     const number = document.getElementById("numberInput").value;
     const pin = document.getElementById("pinInput").value;
+    if (!number) { alert("Enter MSISDN number"); return; }
     if (!pin) { alert("Enter PIN"); return; }
 
     setLoading(loginBtn, true);
+    hideMessage();
+    document.getElementById("apiResponses").style.display = "none";
+    document.getElementById("transactionSection").style.display = "none";
 
     try {
       const res = await fetch(`/api/encrypt`, {
@@ -464,30 +557,44 @@ def serve_index():
         body: JSON.stringify({ number, pin })
       });
       const data = await res.json();
-      if(data.error) { throw new Error(data.error); }
+      
+      if(data.error) { 
+        throw new Error(data.error); 
+      }
 
       document.getElementById("encryptedValue").value = data.encryptedValue || "";
       document.getElementById("xHash").value = data.xHash || "";
       xHashGlobal = data.xHash || "";
 
       document.getElementById("loginResults").style.display = "block";
-      document.getElementById("transactionSection").style.display = "block";
 
-      // Display all API responses
-      const apiContainer = document.getElementById("allApiResponses");
-      apiContainer.innerHTML = "";
-      const additionalApis = data.additionalApis || {};
-      Object.keys(additionalApis).forEach(key => {
-        const div = document.createElement("div");
-        div.className = "response-box";
-        div.innerHTML = `<h4>${key}</h4><pre>${JSON.stringify(additionalApis[key], null, 2)}</pre>`;
-        apiContainer.appendChild(div);
-      });
-      document.getElementById("apiResponses").style.display = "block";
+      // Check if login was successful
+      if (data.loginSuccess) {
+        showMessage("✅ Login successful! All APIs have been called.", "success");
+        document.getElementById("transactionSection").style.display = "block";
+
+        // Display all API responses
+        const apiContainer = document.getElementById("allApiResponses");
+        apiContainer.innerHTML = "";
+        const additionalApis = data.additionalApis || {};
+        Object.keys(additionalApis).forEach(key => {
+          const div = document.createElement("div");
+          div.className = "response-box";
+          div.innerHTML = `<h4>${key}</h4><pre>${JSON.stringify(additionalApis[key], null, 2)}</pre>`;
+          apiContainer.appendChild(div);
+        });
+        document.getElementById("apiResponses").style.display = "block";
+      } else {
+        showMessage("❌ Invalid or wrong PIN. Please check your credentials and try again.", "error");
+        document.getElementById("apiResponses").style.display = "none";
+        document.getElementById("transactionSection").style.display = "none";
+      }
 
     } catch (err) {
       console.error("Login/API error:", err);
-      alert("Login/API error: " + err.message);
+      showMessage("❌ Error: " + err.message, "error");
+      document.getElementById("apiResponses").style.display = "none";
+      document.getElementById("transactionSection").style.display = "none";
     } finally {
       setLoading(loginBtn, false);
     }
@@ -495,7 +602,7 @@ def serve_index():
 
   // Transaction Status Inquiry
   const transactionBtn = document.getElementById("transactionBtn");
-  transactionBtn.setAttribute("data-original", transactionBtn.textContent);
+  transactionBtn.setAttribute("data-original", "Check Status");
   transactionBtn.addEventListener("click", async () => {
     const transactionID = document.getElementById("transactionIdInput").value;
     if (!transactionID) { alert("Enter Transaction ID"); return; }
